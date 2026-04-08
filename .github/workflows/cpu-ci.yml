@@ -1,0 +1,79 @@
+name: CPU Service CI/CD
+
+on:
+  push:
+    branches: [ main ]
+    # 精確打擊：只有當以下路徑變動時才啟動
+    paths:
+      - 'apps/cpu-service/**'
+      - 'k8s/cpu-deployment.yaml'
+      - '.github/workflows/cpu-ci.yml'
+
+jobs:
+  lint-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          cd apps/cpu-service
+          pip install -r requirements.txt
+
+      - name: Run Unit Tests
+        run: |
+          cd apps/cpu-service
+          pytest test_main.py
+
+  build-and-push:
+    needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Docker image
+        run: |
+          # 取得 Git SHA 前 7 碼作為 Tag
+          IMAGE_TAG=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cpu-service
+          
+          docker build -t $IMAGE_NAME:$IMAGE_TAG -t $IMAGE_NAME:latest apps/cpu-service/
+          docker push $IMAGE_NAME:$IMAGE_TAG
+          docker push $IMAGE_NAME:latest
+
+  gitops-update:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+        with:
+          # 使用 PAT 權杖以便寫回倉庫
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update Kubernetes Manifest
+        run: |
+          IMAGE_TAG=$(echo ${{ github.sha }} | cut -c1-7)
+          IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cpu-service
+          
+          # 使用 sed 修改 k8s/cpu-deployment.yaml 中的 image 欄位
+          # 這裡假設原本 image 寫法是 "image: cpu-service" 或舊的版本號
+          sed -i "s|image: .*cpu-service.*|image: $IMAGE_NAME:$IMAGE_TAG|g" k8s/cpu-deployment.yaml
+
+      - name: Commit and Push changes
+        run: |
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+          git add k8s/cpu-deployment.yaml
+          git commit -m "chore(gitops): update cpu-service image to $IMAGE_TAG [skip ci]"
+          git push
