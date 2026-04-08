@@ -3,7 +3,7 @@ import os
 import psutil
 
 # 當我們在 CI/CD 測試更新時，會修改這個變數
-VERSION = "1.0.1-cpu"
+VERSION = "1.0.0-cpu"
 
 def main():
     print(f"--- CPU Service Starting (Version: {VERSION}) ---")
