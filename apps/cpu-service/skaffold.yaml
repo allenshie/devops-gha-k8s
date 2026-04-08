@@ -1,0 +1,14 @@
+apiVersion: skaffold/v4beta3
+kind: Config
+metadata:
+  name: cpu-service
+build:
+  artifacts:
+  - image: cpu-service
+    docker:
+      dockerfile: Dockerfile
+manifests:
+  rawYaml:
+    - ../../k8s/cpu-deployment.yaml
+deploy:
+  kubectl: {}

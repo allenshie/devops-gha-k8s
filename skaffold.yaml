@@ -1,0 +1,7 @@
+apiVersion: skaffold/v4beta3
+kind: Config
+metadata:
+  name: full-app
+requires:
+  - path: ./apps/cpu-service/skaffold.yaml
+  - path: ./apps/gpu-service/skaffold.yaml

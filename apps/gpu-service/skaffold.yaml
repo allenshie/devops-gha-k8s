@@ -1,0 +1,14 @@
+apiVersion: skaffold/v4beta3
+kind: Config
+metadata:
+  name: gpu-service
+build:
+  artifacts:
+  - image: gpu-service
+    docker:
+      dockerfile: Dockerfile
+manifests:
+  rawYaml:
+    - ../../k8s/gpu-deployment.yaml
+deploy:
+  kubectl: {}
