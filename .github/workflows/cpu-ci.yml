@@ -1,41 +1,43 @@
-name: CPU Service CI/CD (Professional)
+name: CPU Service CI/CD (Professional Split-repo)
 
 on:
   push:
     branches: [ main ]
     paths:
       - 'apps/cpu-service/**'
-      - 'k8s/cpu-deployment.yaml'
       - '.github/workflows/cpu-ci.yml'
 
 jobs:
-  # 階段 1: 單元測試
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.9'
-
       - name: Install dependencies
         run: |
           cd apps/cpu-service
           pip install -r requirements.txt
-
       - name: Run Unit Tests
         run: |
           cd apps/cpu-service
           pytest test_main.py
 
-  # 階段 2: K8s 集成測試 (防止部署失敗的關鍵)
   k8s-integration-test:
     needs: lint-and-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
+      # 使用專業的 checkout 方式抓取遠端配置倉庫
+      - name: Checkout Manifest Repo (for testing)
+        uses: actions/checkout@v3
+        with:
+          repository: ${{ github.repository_owner }}/k8s-manifests
+          token: ${{ secrets.GH_PAT }} # 這裡解決了 Private Repo 的訪問問題
+          path: remote-manifests
 
       - name: Create KinD Cluster
         uses: helm/kind-action@v1.4.0
@@ -44,7 +46,6 @@ jobs:
 
       - name: Build local image for testing
         run: |
-          # 這裡使用暫時的 Tag :test 做內部驗證
           docker build -t cpu-service:test apps/cpu-service/
 
       - name: Load image into KinD
@@ -53,69 +54,55 @@ jobs:
 
       - name: Deploy and Verify
         run: |
-          # 修改 YAML 暫時改用測試 Image Tag
-          sed -i "s|image: .*|image: cpu-service:test|g" k8s/cpu-deployment.yaml
+          cd remote-manifests
+          sed -i "s|image: .*cpu-service.*|image: cpu-service:test|g" apps/cpu-service/cpu-deployment.yaml
+          kubectl apply -f apps/cpu-service/cpu-deployment.yaml
           
-          # 執行部署
-          kubectl apply -f k8s/cpu-deployment.yaml
-          
-          # 等待 Pod 啟動 (給予 60 秒緩衝)
           echo "Waiting for pod to be ready..."
           kubectl rollout status deployment/cpu-service --timeout=60s
-          
-          # 最終狀態檢查
-          STATUS=$(kubectl get pods -l app=cpu-service -o jsonpath="{.items[0].status.phase}")
-          if [ "$STATUS" != "Running" ]; then
-            echo "Deployment Failed! Status is $STATUS"
-            kubectl describe pod -l app=cpu-service
-            kubectl logs -l app=cpu-service
-            exit 1
-          fi
-          echo "K8s Integration Test Passed!"
 
-  # 階段 3: 正式推送到雲端
   build-and-push:
     needs: k8s-integration-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-
       - name: Log in to Docker Hub
         uses: docker/login-action@v2
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
-
       - name: Build and Push Docker image
         run: |
           IMAGE_TAG=$(echo ${{ github.sha }} | cut -c1-7)
           IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cpu-service
-          
           docker build -t $IMAGE_NAME:$IMAGE_TAG -t $IMAGE_NAME:latest apps/cpu-service/
           docker push $IMAGE_NAME:$IMAGE_TAG
           docker push $IMAGE_NAME:latest
 
-  # 階段 4: 更新 GitOps Manifest
   gitops-update:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout Manifest Repo (for update)
+        uses: actions/checkout@v3
         with:
+          repository: ${{ github.repository_owner }}/k8s-manifests
           token: ${{ secrets.GH_PAT }}
+          path: manifests-repo
 
       - name: Update Kubernetes Manifest
         run: |
           IMAGE_TAG=$(echo ${{ github.sha }} | cut -c1-7)
           IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cpu-service
           
-          # 修改回正式的遠端 Image 路徑
-          sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|g" k8s/cpu-deployment.yaml
+          cd manifests-repo
+          sed -i "s|image: .*cpu-service.*|image: $IMAGE_NAME:$IMAGE_TAG|g" apps/cpu-service/cpu-deployment.yaml
 
-      - name: Commit and Push changes
+      - name: Commit and Push to Manifest Repo
         run: |
+          cd manifests-repo
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          git add k8s/cpu-deployment.yaml
-          git commit -m "chore(gitops): update cpu-service image to $IMAGE_TAG [skip ci]"
+          git add apps/cpu-service/cpu-deployment.yaml
+          git commit -m "chore(gitops): update cpu-service image to $IMAGE_TAG"
           git push
