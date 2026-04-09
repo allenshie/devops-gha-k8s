@@ -1,15 +1,15 @@
-name: CPU Service CI/CD
+name: CPU Service CI/CD (Professional)
 
 on:
   push:
     branches: [ main ]
-    # 精確打擊：只有當以下路徑變動時才啟動
     paths:
       - 'apps/cpu-service/**'
       - 'k8s/cpu-deployment.yaml'
       - '.github/workflows/cpu-ci.yml'
 
 jobs:
+  # 階段 1: 單元測試
   lint-and-test:
     runs-on: ubuntu-latest
     steps:
@@ -30,8 +30,52 @@ jobs:
           cd apps/cpu-service
           pytest test_main.py
 
-  build-and-push:
+  # 階段 2: K8s 集成測試 (防止部署失敗的關鍵)
+  k8s-integration-test:
     needs: lint-and-test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Create KinD Cluster
+        uses: helm/kind-action@v1.4.0
+        with:
+          cluster_name: integration-test-cluster
+
+      - name: Build local image for testing
+        run: |
+          # 這裡使用暫時的 Tag :test 做內部驗證
+          docker build -t cpu-service:test apps/cpu-service/
+
+      - name: Load image into KinD
+        run: |
+          kind load docker-image cpu-service:test --name integration-test-cluster
+
+      - name: Deploy and Verify
+        run: |
+          # 修改 YAML 暫時改用測試 Image Tag
+          sed -i "s|image: .*|image: cpu-service:test|g" k8s/cpu-deployment.yaml
+          
+          # 執行部署
+          kubectl apply -f k8s/cpu-deployment.yaml
+          
+          # 等待 Pod 啟動 (給予 60 秒緩衝)
+          echo "Waiting for pod to be ready..."
+          kubectl rollout status deployment/cpu-service --timeout=60s
+          
+          # 最終狀態檢查
+          STATUS=$(kubectl get pods -l app=cpu-service -o jsonpath="{.items[0].status.phase}")
+          if [ "$STATUS" != "Running" ]; then
+            echo "Deployment Failed! Status is $STATUS"
+            kubectl describe pod -l app=cpu-service
+            kubectl logs -l app=cpu-service
+            exit 1
+          fi
+          echo "K8s Integration Test Passed!"
+
+  # 階段 3: 正式推送到雲端
+  build-and-push:
+    needs: k8s-integration-test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
@@ -44,7 +88,6 @@ jobs:
 
       - name: Build and Push Docker image
         run: |
-          # 取得 Git SHA 前 7 碼作為 Tag
           IMAGE_TAG=$(echo ${{ github.sha }} | cut -c1-7)
           IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cpu-service
           
@@ -52,13 +95,13 @@ jobs:
           docker push $IMAGE_NAME:$IMAGE_TAG
           docker push $IMAGE_NAME:latest
 
+  # 階段 4: 更新 GitOps Manifest
   gitops-update:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
         with:
-          # 使用 PAT 權杖以便寫回倉庫
           token: ${{ secrets.GH_PAT }}
 
       - name: Update Kubernetes Manifest
@@ -66,9 +109,8 @@ jobs:
           IMAGE_TAG=$(echo ${{ github.sha }} | cut -c1-7)
           IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cpu-service
           
-          # 使用 sed 修改 k8s/cpu-deployment.yaml 中的 image 欄位
-          # 這裡假設原本 image 寫法是 "image: cpu-service" 或舊的版本號
-          sed -i "s|image: .*cpu-service.*|image: $IMAGE_NAME:$IMAGE_TAG|g" k8s/cpu-deployment.yaml
+          # 修改回正式的遠端 Image 路徑
+          sed -i "s|image: .*|image: $IMAGE_NAME:$IMAGE_TAG|g" k8s/cpu-deployment.yaml
 
       - name: Commit and Push changes
         run: |
@@ -77,4 +119,3 @@ jobs:
           git add k8s/cpu-deployment.yaml
           git commit -m "chore(gitops): update cpu-service image to $IMAGE_TAG [skip ci]"
           git push
-
