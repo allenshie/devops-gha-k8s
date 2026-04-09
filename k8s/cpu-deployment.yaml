@@ -22,7 +22,7 @@ spec:
     spec:
       containers:
       - name: cpu-service
-        image: allen70429/cpu-service:530c15d
+        image: allen70429/cpu-service:cc92859
         resources:
           limits:
             cpu: "200m"
