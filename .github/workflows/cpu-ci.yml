@@ -55,8 +55,8 @@ jobs:
       - name: Deploy and Verify
         run: |
           cd remote-manifests
-          sed -i "s|image: .*cpu-service.*|image: cpu-service:test|g" apps/cpu-service/cpu-deployment.yaml
-          kubectl apply -f apps/cpu-service/cpu-deployment.yaml
+          sed -i "s|image: .*cpu-service.*|image: cpu-service:test|g" apps/cpu-service/deployment.yaml
+          kubectl apply -f apps/cpu-service/deployment.yaml
           
           echo "Waiting for pod to be ready..."
           kubectl rollout status deployment/cpu-service --timeout=60s
@@ -96,13 +96,13 @@ jobs:
           IMAGE_NAME=${{ secrets.DOCKER_USERNAME }}/cpu-service
           
           cd manifests-repo
-          sed -i "s|image: .*cpu-service.*|image: $IMAGE_NAME:$IMAGE_TAG|g" apps/cpu-service/cpu-deployment.yaml
+          sed -i "s|image: .*cpu-service.*|image: $IMAGE_NAME:$IMAGE_TAG|g" apps/cpu-service/deployment.yaml
 
       - name: Commit and Push to Manifest Repo
         run: |
           cd manifests-repo
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git config --global user.name "github-actions[bot]"
-          git add apps/cpu-service/cpu-deployment.yaml
+          git add apps/cpu-service/deployment.yaml
           git commit -m "chore(gitops): update cpu-service image to $IMAGE_TAG"
           git push
